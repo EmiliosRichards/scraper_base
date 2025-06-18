@@ -29,9 +29,12 @@ async def fetch_page_content(page: Page, url: str, config: ScraperConfig, input_
         else:
             logger.error(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Failed to get a response object for {url}. Navigation might have failed silently.")
             return None, None
-    except PlaywrightTimeoutError:
-        logger.error(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Playwright navigation timeout for {url} after {config.default_navigation_timeout / 1000}s.")
-        return None, -1 # Specific code for timeout
+    except PlaywrightTimeoutError as e:
+        error_message = str(e)
+        logger.error(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Playwright navigation timeout for {url} after {config.default_navigation_timeout / 1000}s: {error_message}")
+        if "net::ERR_NAME_NOT_RESOLVED" in error_message:
+            return None, -2  # DNS error
+        return None, -1  # Other timeout error
     except PlaywrightError as e:
         error_message = str(e)
         logger.error(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Playwright error during navigation to {url}: {error_message}")
