@@ -5,6 +5,7 @@ import logging
 import time
 import heapq
 import hashlib # Added for hashing long filenames
+import random
 from . import caching
 from urllib.parse import urljoin, urlparse, urldefrag, urlunparse
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
@@ -261,7 +262,7 @@ async def scrape_website(
     async with async_playwright() as p:
         browser = None
         try:
-            launch_options: Dict[str, Any] = {'headless': True}
+            launch_options: Dict[str, Any] = {'headless': config.headless_mode}
             proxy_manager = None
             proxy_to_use = None
 
@@ -275,10 +276,13 @@ async def scrape_website(
                     logger.warning(f"{log_identifier} Proxy is enabled, but no healthy proxy could be obtained. Proceeding without proxy.")
 
             browser = await p.chromium.launch(**launch_options)
+            user_agent = random.choice(config.user_agents) if config.user_agents else config.user_agent
+
             context = await browser.new_context(
-                user_agent=config.user_agent,
+                user_agent=user_agent,
                 java_script_enabled=True,
-                ignore_https_errors=True
+                ignore_https_errors=True,
+                extra_http_headers=config.default_headers
             )
             
             logger.info(f"{log_identifier} Attempting scrape with entry point: {normalized_given_url}")

@@ -1,6 +1,7 @@
 import os
+import json
 from dotenv import load_dotenv
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 # Load environment variables from a .env file.
 # This allows for flexible configuration without hardcoding values.
@@ -22,7 +23,11 @@ class ScraperConfig:
         variables or using predefined defaults.
         """
         # --- Core Scraping Parameters ---
-        self.user_agent: str = os.getenv('SCRAPER_USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36')
+        self.user_agent: str = os.getenv('SCRAPER_USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36')
+        user_agents_str: str = os.getenv('USER_AGENTS', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36,Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36,Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36')
+        self.user_agents: List[str] = [ua.strip() for ua in user_agents_str.split(',') if ua.strip()]
+        self.default_headers: Dict[str, str] = json.loads(os.getenv('SCRAPER_DEFAULT_HEADERS', '{"Accept-Language": "en-US,en;q=0.9", "Accept-Encoding": "gzip, deflate, br", "Connection": "keep-alive", "Referer": "https://www.google.com/"}'))
+        self.headless_mode: bool = os.getenv('SCRAPER_HEADLESS_MODE', 'True').lower() == 'true'
         self.default_page_timeout: int = int(os.getenv('SCRAPER_PAGE_TIMEOUT_MS', '30000'))
         self.default_navigation_timeout: int = int(os.getenv('SCRAPER_NAVIGATION_TIMEOUT_MS', '60000'))
         self.scrape_max_retries: int = int(os.getenv('SCRAPER_MAX_RETRIES', '2'))
