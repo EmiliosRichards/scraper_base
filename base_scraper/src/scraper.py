@@ -5,6 +5,7 @@ import logging
 import time
 import heapq
 import hashlib # Added for hashing long filenames
+from . import caching
 from urllib.parse import urljoin, urlparse, urldefrag, urlunparse
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 from bs4 import BeautifulSoup
@@ -15,6 +16,7 @@ from typing import Set, Tuple, Optional, List, Dict, Any
 from .config import ScraperConfig
 from .utils import normalize_url, get_safe_filename, extract_text_from_html, find_internal_links, _classify_page_type, validate_link_status, process_input_url
 from .page_handler import fetch_page_content
+from .proxy_manager import ProxyManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,9 @@ async def is_allowed_by_robots(url: str, client: httpx.AsyncClient, config: Scra
         logger.debug(f"[RowID: {input_row_id}, Company: {company_name_or_id}] robots.txt check is disabled.")
         return True
     parsed_url = urlparse(url)
+    if parsed_url.scheme == 'file':
+        logger.debug(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Skipping robots.txt check for local file URL: {url}")
+        return True
     robots_url = f"{parsed_url.scheme}://{parsed_url.netloc}/robots.txt"
     rp = RobotFileParser()
     try:
@@ -61,7 +66,9 @@ async def _perform_scrape_for_entry_point(
     output_dir_for_run: str,
     company_name_or_id: str,
     globally_processed_urls: Set[str],
-    input_row_id: Any
+    input_row_id: Any,
+    proxy_manager: Optional[ProxyManager],
+    proxy_to_use: Optional[str]
 ) -> Tuple[List[Dict[str, Any]], str, Optional[str], str]:
     """
     Core scraping logic for a single entry point URL.
@@ -86,7 +93,6 @@ async def _perform_scrape_for_entry_point(
     priority_pages_collected_count = 0
     priority_page_types_for_summary = {"homepage", "about", "product_service"}
 
-    # Priority queue: (-score, depth, url)
     urls_to_scrape_q: List[Tuple[int, int, str]] = [(-100, 0, entry_url_to_process)]
     heapq.heapify(urls_to_scrape_q)
     processed_urls_this_entry_call: Set[str] = {entry_url_to_process}
@@ -151,7 +157,7 @@ async def _perform_scrape_for_entry_point(
                         "status": status_code_fetch,
                         "content_file_path": content_filepath,
                         "page_type": page_type,
-                        "summary_text": None # Placeholder, will be populated later
+                        "summary_text": None
                     }
                     scraped_page_results.append(page_result)
 
@@ -171,8 +177,13 @@ async def _perform_scrape_for_entry_point(
                             processed_urls_this_entry_call.add(link_url)
             else:
                 logger.warning(f"[RowID: {input_row_id}] Failed to fetch content from '{current_url_from_queue}'. Status: {status_code_fetch}.")
+                
+                # Report proxy failure if applicable
+                if proxy_manager and proxy_to_use and status_code_fetch in [-1, -3]: # Timeout or Connection Refused
+                    proxy_manager.report_failure(proxy_to_use)
+
                 if current_url_from_queue == entry_url_to_process:
-                    status_map = {-1: "TimeoutError", -2: "DNSError", -3: "ConnectionRefused", -4: "PlaywrightError", -5: "GenericScrapeError", -6: "RequestAborted"}
+                    status_map = {-1: "TimeoutError", -2: "DNSError", -3: "ConnectionRefused", -4: "PlaywrightError", -5: "GenericScrapeError", -6: "RequestAborted", -7: "CaptchaFailed"}
                     if status_code_fetch is None:
                         http_status_report = "UnknownScrapeError"
                     else:
@@ -191,12 +202,11 @@ async def _perform_scrape_for_entry_point(
                 logger.info(f"[RowID: {input_row_id}] Truncated summary text to {config.llm_max_input_chars_for_summary} chars.")
 
         if scraped_page_results:
-            # Add summary text to the first page's result dictionary
             scraped_page_results[0]["summary_text"] = final_summary_input_text
             logger.info(f"[RowID: {input_row_id}] Successfully scraped {len(scraped_page_results)} pages for entry '{entry_url_to_process}'.")
             return scraped_page_results, "Success", final_canonical_entry_url_for_this_attempt, final_summary_input_text
         else:
-            status_map = {-1: "TimeoutError", -2: "DNSError", -3: "ConnectionRefused", -4: "PlaywrightError", -5: "GenericScrapeError", -6: "RequestAborted"}
+            status_map = {-1: "TimeoutError", -2: "DNSError", -3: "ConnectionRefused", -4: "PlaywrightError", -5: "GenericScrapeError", -6: "RequestAborted", -7: "CaptchaFailed"}
             if entry_point_status_code is None:
                 final_status = "NoContentScraped_Overall"
             else:
@@ -219,30 +229,26 @@ async def scrape_website(
 ) -> List[Dict[str, Any]]:
     """
     Performs a comprehensive scrape of a website based on a given URL and configuration.
-
-    Args:
-        given_url: The starting URL for the scrape.
-        config: A ScraperConfig object with all necessary settings.
-        output_dir_for_run: The base directory for storing output files for this run.
-        company_name_or_id: A unique identifier for the company being scraped.
-        input_row_id: An identifier for logging purposes, e.g., a row number.
-
-    Returns:
-        A list of dictionaries, where each dictionary represents a scraped page
-        and contains keys like 'url', 'status', 'content_file_path', etc.
-        Returns an empty list if the scrape fails or is disallowed.
+    Includes caching to avoid re-scraping the same content.
     """
-    logger.info(f"[RowID: {input_row_id}, Company: {company_name_or_id}] Starting scrape for URL: {given_url}")
-    
     log_identifier = f"[RowID: {input_row_id}, Company: {company_name_or_id}]"
+    logger.info(f"{log_identifier} Starting scrape for URL: {given_url}")
+
+    # --- Caching Logic: Check before scraping ---
+    if config.caching_enabled:
+        cache_key = caching.generate_cache_key(given_url)
+        cached_results = caching.load_from_cache(cache_key, config.cache_dir)
+        if cached_results is not None:
+            logger.info(f"{log_identifier} Scrape data for '{given_url}' loaded from cache.")
+            return cached_results
+
     processed_url, status = process_input_url(given_url, config.url_probing_tlds, log_identifier)
 
     if not processed_url:
-        logger.warning(f"{log_identifier} The URL '{given_url}' was determined to be invalid after processing. Aborting scrape.")
+        logger.warning(f"{log_identifier} The URL '{given_url}' was determined to be invalid. Aborting scrape.")
         return []
 
     normalized_given_url = processed_url
-
     globally_processed_urls: Set[str] = set()
 
     async with httpx.AsyncClient(follow_redirects=True, verify=False) as http_client:
@@ -251,28 +257,48 @@ async def scrape_website(
     
     os.makedirs(output_dir_for_run, exist_ok=True)
 
+    results = []
     async with async_playwright() as p:
         browser = None
         try:
-            browser = await p.chromium.launch(headless=True)
+            launch_options: Dict[str, Any] = {'headless': True}
+            proxy_manager = None
+            proxy_to_use = None
+
+            if config.proxy_enabled:
+                proxy_manager = ProxyManager(config)
+                proxy_to_use = proxy_manager.get_proxy()
+                if proxy_to_use:
+                    logger.info(f"{log_identifier} Using proxy: {proxy_to_use}")
+                    launch_options['proxy'] = {'server': proxy_to_use}
+                else:
+                    logger.warning(f"{log_identifier} Proxy is enabled, but no healthy proxy could be obtained. Proceeding without proxy.")
+
+            browser = await p.chromium.launch(**launch_options)
             context = await browser.new_context(
                 user_agent=config.user_agent,
                 java_script_enabled=True,
                 ignore_https_errors=True
             )
             
-            logger.info(f"[RowID: {input_row_id}] Attempting scrape with entry point: {normalized_given_url}")
+            logger.info(f"{log_identifier} Attempting scrape with entry point: {normalized_given_url}")
             async with httpx.AsyncClient(follow_redirects=True, verify=False) as validation_client:
                 results, status, _, _ = await _perform_scrape_for_entry_point(
                     normalized_given_url, context, validation_client, config, output_dir_for_run,
-                    company_name_or_id, globally_processed_urls, input_row_id
+                    company_name_or_id, globally_processed_urls, input_row_id,
+                    proxy_manager, proxy_to_use
                 )
             
-            logger.info(f"[RowID: {input_row_id}] Scrape attempt for '{normalized_given_url}' finished with status: {status}. Returning results.")
-            if browser: await browser.close()
-            return results
-
+            logger.info(f"{log_identifier} Scrape attempt for '{normalized_given_url}' finished with status: {status}. Returning results.")
+            
         except Exception as e:
-            logger.error(f"[RowID: {input_row_id}] Outer error in scrape_website for '{given_url}': {e}", exc_info=True)
+            logger.error(f"{log_identifier} Outer error in scrape_website for '{given_url}': {e}", exc_info=True)
+        finally:
             if browser: await browser.close()
-            return []
+
+    # --- Caching Logic: Save after scraping ---
+    if config.caching_enabled and results:
+        cache_key = caching.generate_cache_key(given_url)
+        caching.save_to_cache(cache_key, results, config.cache_dir)
+
+    return results

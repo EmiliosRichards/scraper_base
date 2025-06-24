@@ -76,3 +76,26 @@ class ScraperConfig:
 
         page_type_product_service_str: str = os.getenv('PAGE_TYPE_KEYWORDS_PRODUCT_SERVICE', 'products,services,solutions,offerings,platform,features,produkte,leistungen,loesungen')
         self.page_type_keywords_product_service: List[str] = [kw.strip().lower() for kw in page_type_product_service_str.split(',') if kw.strip()]
+
+# --- Caching ---
+        self.caching_enabled: bool = os.getenv('CACHING_ENABLED', 'True').lower() == 'true'
+        self.cache_dir: str = os.getenv('CACHE_DIR', 'cache')
+        # --- Proxy Management ---
+        self.proxy_enabled: bool = os.getenv('PROXY_ENABLED', 'False').lower() == 'true'
+        self.proxy_list: List[str] = [p.strip() for p in os.getenv('PROXY_LIST', '').split(',') if p.strip()]
+        self.proxy_rotation_strategy: str = os.getenv('PROXY_ROTATION_STRATEGY', 'random') # 'random', 'sequential', 'rotate_on_failure'
+        self.proxy_health_check_enabled: bool = os.getenv('PROXY_HEALTH_CHECK_ENABLED', 'True').lower() == 'true'
+        self.proxy_cooldown_seconds: int = int(os.getenv('PROXY_COOLDOWN_SECONDS', '300'))
+
+        # --- Interaction Handling ---
+        self.interaction_handler_enabled: bool = os.getenv('INTERACTION_HANDLER_ENABLED', 'True').lower() == 'true'
+        interaction_selectors_str: str = os.getenv('INTERACTION_SELECTORS', 'button[id*="accept"],button[id*="agree"],button[id*="consent"],button[id*="cookie"]')
+        self.interaction_selectors: List[str] = [s.strip() for s in interaction_selectors_str.split(',') if s.strip()]
+        interaction_text_queries_str: str = os.getenv('INTERACTION_TEXT_QUERIES', 'Accept all,Agree,Consent,I agree')
+        self.interaction_text_queries: List[str] = [q.strip() for q in interaction_text_queries_str.split(',') if q.strip()]
+        self.interaction_handler_timeout_seconds: int = int(os.getenv('INTERACTION_HANDLER_TIMEOUT_SECONDS', '5'))
+
+        # --- CAPTCHA Solving ---
+        self.captcha_solver_enabled: bool = os.getenv('CAPTCHA_SOLVER_ENABLED', 'False').lower() == 'true'
+        self.captcha_provider: str = os.getenv('CAPTCHA_PROVIDER', '2captcha')
+        self.captcha_api_key: Optional[str] = os.getenv('CAPTCHA_API_KEY')

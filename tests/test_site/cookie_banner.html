@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cookie Banner Test</title>
+</head>
+<body>
+    <h1>Page with a Cookie Banner</h1>
+    <div id="cookie-consent-banner">
+        <p>This website uses cookies.</p>
+        <button id="accept-cookies">Accept all</button>
+    </div>
+</body>
+</html>
+<script>
+    document.getElementById('accept-cookies').addEventListener('click', function() {
+        document.getElementById('cookie-banner').style.display = 'none';
+    });
+</script>

@@ -171,6 +171,8 @@ def _classify_page_type(url_str: str, config: ScraperConfig) -> str:
     
     # Path-based classification
     parsed_url = urlparse(url_lower)
+    if parsed_url.scheme == 'file':
+        return "homepage"
     path_lower = parsed_url.path
 
     # New page type classification
@@ -366,7 +368,7 @@ def process_input_url(
 
     # Final validation: must have a scheme and be a string
     if not processed_url or not isinstance(processed_url, str) or \
-       not processed_url.startswith(('http://', 'https://')):
+       not processed_url.startswith(('http://', 'https://', 'file://')):
         logger.warning(
             f"{row_identifier_for_log} Final URL is invalid: '{processed_url}' "
             f"(Original input was: '{given_url_original}')"
